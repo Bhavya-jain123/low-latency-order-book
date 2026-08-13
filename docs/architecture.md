@@ -1,42 +1,118 @@
-# Architecture and design notes
+# Architecture
 
-## Data flow
+## Data Flow
 
 ```text
-deterministic synthetic generator -> one producer -> bounded SPSC ring -> one consumer
-                                                                      -> MatchingEngine
-                                                                      -> LimitOrderBook + trade history
+Synthetic Order Generator
+          │
+          ▼
+    Producer Thread
+          │
+          ▼
+   SPSC Ring Buffer
+          │
+          ▼
+    Consumer Thread
+          │
+          ▼
+   Matching Engine
+       ┌──┴──┐
+       ▼     ▼
+ Order Book  Trade History
 ```
 
-The order book is only mutated by the consumer/matching thread. The CLI uses the engine directly because it is an interactive single-threaded tool. This ownership rule removes the need for book locks and makes price-time behaviour deterministic for a given command sequence.
+The matching engine is the **single owner of the order book**. The CLI bypasses the queue and interacts directly with the engine for interactive use.
 
-## Book representation and complexity
+---
 
-`std::map` stores bid price levels in descending order and ask price levels in ascending order. Thus the best price is `begin()` for both sides. Inserting/removing a price level is O(log P), where P is active price levels. Each level is a `std::list<Order*>`; appending and erasing using its stored iterator are O(1), and preserves FIFO time priority. The order-ID index is an `std::unordered_map<OrderId, Location>`; cancellation lookup is average-case constant time, not an absolute O(1) guarantee.
+## Order Book
 
-The index holds side, price, and the list iterator, so cancellation never scans a book. A separate submitted-ID set rejects ID reuse after an order has filled or been cancelled. Debug/test code calls `validate_invariants()` to cross-check the index, maps, empty levels, quantities, and sequence order.
+The book maintains separate **BID** and **ASK** sides using ordered price levels.
 
-## Matching
+```text
+std::map<Price, PriceLevel>
+        │
+        └── std::list<Order*>
+```
 
-An incoming buy repeatedly consumes the first order at the lowest ask while `buy_price >= best_ask`; a sell does the symmetric operation against the highest bid. Quantity is `min(incoming_remaining, resting_remaining)`. The execution price is the **resting order's price**. A completely filled resting order is erased from list/map/index and returned to the pool. If residual incoming quantity remains, it becomes the last order in its price level.
+* `std::map` keeps price levels ordered.
+* `std::list` preserves FIFO time priority within a price level.
+* `std::unordered_map<OrderId, Location>` provides average-case constant-time order lookup for cancellation.
 
-This engine only supports limit orders. It uses integer price ticks rather than floating point; CLI input such as `100.25` is 10,025 ticks.
+Prices are stored as **integer ticks** rather than floating point.
 
-## SPSC queue and memory ordering
+---
 
-`SpscRingBuffer<T, Capacity>` is bounded and only supports exactly one producer and one consumer. Its usable capacity is `Capacity - 1`; one slot distinguishes full from empty. The producer writes data then publishes `write_index` with release ordering. The consumer observes that index with acquire ordering before reading data. The consumer releases its updated read index; the producer acquires it before overwriting a slot. Each side modifies only its own index, and indices are cache-line aligned to reduce false sharing.
+## Matching Engine
 
-`try_push` returns false when full and `try_pop` returns false when empty. The benchmark's producer applies explicit backpressure by yielding and retrying, so it does not silently lose commands. This is not an MPMC queue, a wait-free system, or a claim of universally superior performance.
+For a BUY:
 
-MSVC reports C4324 when a type is deliberately padded because of the queue's 64-byte index alignment. The CMake target suppresses only that warning (`/wd4324`); the padding is intentional and documented here rather than being treated as an accidental layout defect.
+```text
+match while buy_price >= best_ask
+```
 
-## Memory pool
+For a SELL:
 
-`OrderPool` preallocates a fixed vector of `Order` objects and keeps a free pointer stack. Only resting orders occupy pool slots; incoming orders that fully execute do not need a pooled object. If a partially unfilled incoming order cannot be rested because the pool is exhausted, completed fills remain valid and the residual is explicitly reported as pool-exhausted/rejected. The pool removes per-resting-order heap allocation but the project intentionally does **not** claim zero allocation: maps, hash tables, list nodes, trade history, and benchmark vectors can allocate.
+```text
+match while sell_price <= best_bid
+```
 
-## Limitations
+Each execution uses:
 
-- Single symbol, fixed-point price scale of 100 for the CLI.
-- No amend/replace, market orders, persistence, recovery, risk controls, audit-grade clock, exchange protocol, or live connectivity.
-- SPSC benchmark latency measures consumer `engine.process()` duration, not end-to-end queue wait or scheduler latency.
-- `std::map`, `std::list`, and `std::unordered_map` prioritize transparent correctness over a cache-optimized production layout.
+```text
+trade_quantity = min(incoming, resting)
+```
+
+The simulator uses the **resting order's price** as the execution price.
+
+Remaining quantity is added back to the appropriate book.
+
+---
+
+## Concurrency
+
+The ingestion path uses a bounded **SPSC (Single-Producer, Single-Consumer) ring buffer**.
+
+```text
+Producer → SPSC Queue → Matching Engine
+```
+
+The producer and consumer use atomic indices with **acquire/release ordering**. The queue applies backpressure when full rather than dropping orders.
+
+The order book itself is not shared between threads, avoiding locking in the matching path.
+
+---
+
+## Memory Management
+
+`OrderPool` preallocates reusable `Order` objects for active resting orders.
+
+This reduces repeated heap allocation, but the system does **not** claim to be zero-allocation because other standard-library containers may still allocate.
+
+---
+
+## Complexity
+
+| Operation                     | Complexity     |
+| ----------------------------- | -------------- |
+| Price-level insertion/removal | `O(log P)`     |
+| Order-ID lookup               | Average `O(1)` |
+| FIFO insertion                | `O(1)`         |
+| Known-order removal           | `O(1)`         |
+
+`P` represents the number of active price levels.
+
+---
+
+## Design Trade-offs
+
+The implementation favors **correctness, deterministic behavior, and explainability** over a highly specialized production-market-data layout.
+
+It currently uses:
+
+* `std::map`
+* `std::list`
+* `std::unordered_map`
+* Standard C++ atomics
+
+This keeps the core architecture understandable while still allowing concurrency and performance experiments.
