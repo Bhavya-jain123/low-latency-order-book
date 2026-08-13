@@ -1,13 +1,63 @@
-# Benchmarking methodology
+# Benchmarking
 
-`order_engine_bench` creates a seeded synthetic command sequence and sends it through one producer, a bounded SPSC queue, and one matching consumer. It reports commands processed, elapsed wall time, commands/second, engine counters, and min/average/P50/P90/P95/P99/max consumer processing time in nanoseconds. Percentiles are selected from sorted samples with a documented nearest-index calculation.
+The `order_engine_bench` executable generates a **deterministic synthetic workload** and processes it through the producer → SPSC queue → matching-engine pipeline.
 
-Run a reproducible workload:
+## What is Measured
+
+The benchmark reports:
+
+* Total commands processed
+* Elapsed time
+* Commands per second
+* Trade/cancellation counters
+* Minimum, average, P50, P90, P95, P99, and maximum engine-processing latency
+
+Latency is measured for the matching-engine processing step using nanoseconds.
+
+## Running a Benchmark
+
+Use a Release build:
 
 ```sh
-./build-release/order_engine_bench --count 100000 --seed 42 --pattern mixed --cancel-probability 0.10 --csv results.csv
+./build-release/order_engine_bench \
+  --count 100000 \
+  --seed 42 \
+  --pattern mixed \
+  --cancel-probability 0.10 \
+  --csv results.csv
 ```
 
-Supported patterns are `noncrossing`, `crossing`, `sameprice`, `mixed`, and `burst`. Counts of 10,000, 100,000, and 1,000,000 exercise the requested load scales. Results are intentionally not checked into the repository because they are machine-, compiler-, build-, and load-dependent; the CSV option emits actual results for each run.
+The fixed seed makes a workload reproducible.
 
-Interpret latency carefully: per-command timing includes matching/book work and clock overhead, not queue wait. Use a Release build, report machine/compiler details with results, repeat runs, and do not compare results from different workload settings as if they were equivalent.
+## Workloads
+
+Supported patterns:
+
+```text
+noncrossing
+crossing
+sameprice
+mixed
+burst
+```
+
+The benchmark can be run at different scales, including:
+
+```text
+10,000
+100,000
+1,000,000 orders
+```
+
+## Interpreting Results
+
+Latency measures the time spent processing a command by the matching engine. It **does not include time waiting in the SPSC queue**.
+
+For meaningful comparisons:
+
+* Use the same workload and seed.
+* Use a Release build.
+* Repeat runs.
+* Record the machine and compiler configuration.
+
+Benchmark results are not committed to the repository because they depend on the execution environment.
