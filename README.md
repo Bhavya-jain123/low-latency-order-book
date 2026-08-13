@@ -217,18 +217,30 @@ The project is intended to investigate questions such as:
 
 **C++20** · **CMake** · **GoogleTest** · **`std::atomic`** · **`std::map`** · **`std::unordered_map`** · **SPSC Ring Buffer** · **Synthetic Workloads**
 
----
 
+---
 ## Repository Structure
 
 ```text
-include/      Core interfaces and data structures
-src/          Matching engine and system implementation
-tests/        Automated tests
-benchmarks/   Synthetic workloads and performance measurement
-docs/         Architecture and benchmarking documentation
-```
+low-latency-order-book/
+│
+├── benchmarks/
+├── docs/
+│   ├── architecture.md
+│   ├── benchmarking.md
+│   └── testing.md
+│
+├── include/
+├── scripts/
+├── src/
+├── tests/
+│
+├── .gitignore
+├── CMakeLists.txt
+├── LICENSE
+└── README.md
 
+```
 ---
 
 ## Scope
@@ -237,9 +249,10 @@ This project focuses on the engineering core of a trading system:
 
 **order matching + data structures + concurrency + memory management + performance measurement.**
 
-It intentionally does **not** attempt to implement a real exchange or brokerage platform.
+The system is an **offline educational simulation** that processes deterministic synthetic orders. It does not connect to live markets, brokers, or exchanges.
 
-For deeper design decisions, complexity analysis, concurrency details, and benchmark methodology, see:
+For deeper design and implementation details, see:
 
 * [`docs/architecture.md`](docs/architecture.md)
 * [`docs/benchmarking.md`](docs/benchmarking.md)
+* [`docs/testing.md`](docs/testing.md)
